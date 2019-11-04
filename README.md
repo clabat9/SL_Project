@@ -10,4 +10,4 @@ With this work we propose a model to recognize the speaker and the place of regi
 
 - ML problems and techniques are constantly evolving and we thought a good idea is using **State-of-the-Art** methods. In particular, here we propose a graph-based semi-supervised clustering algorithm. The paper poster can be freely read [here](https://sigport.org/sites/default/files/docs/PosterGlobalSip_2.pdf).
 
-All the detailed descriptions of scripts and logic are in **report.html** .
+All the detailed descriptions of scripts and logic are in **report.html** (not readable on GitHub, you can just use a viewer.
