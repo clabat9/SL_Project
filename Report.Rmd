@@ -1,0 +1,295 @@
+---
+title: "A model for speakers and places recognition"
+author: "Claudio Battiloro, Federica Spoto, Egon Ferri, Lorenzo Giusti, Andrea Ceschini"
+date: "26 giugno 2019"
+output:
+  prettydoc::html_pretty:
+    theme: hpstr
+    highlight: github
+    toc: true
+    number_sections: true
+    df.print: tibble
+    css: css_custom.css
+---
+
+<style>
+a:link {
+    color: purple;
+}
+a:visited{
+    color: darkblue;
+}
+a:hover {
+    color: orange;
+}
+
+</style>
+\usepackage{unicode-math}
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(knitr)
+```
+
+```{r, out.width = "110%", echo = FALSE, fig.align = "center"}
+knitr::include_graphics("sound.png")
+```
+
+
+# Introduction
+
+With this work we propose a model to recognize the speaker and the place of registrations token using **Science Journal** app. These registrations are made of various kinds of environment sensing implemented through the mobile's sensors.  We faced the task using most of the main tools studied during the **Statistical Learning** course; in particular, we proceeded with some fundamental and essential guidelines:
+
+- Sensing is, obviously, time dependent and we have to take this into account, so the basis of the work is **Functional Analysis**, in particular basis expansion.
+
+- Basis expansion means, in general, that there will be a huge number of features (coefficients) in the dataset, so another keyword is **Dimensionality Reduction**.
+
+- ML problems and techniques are constantly evolving and we thought a good idea is using **State-of-the-Art** methods. In particular, here we propose a graph-based semi-supervised clustering algorithm. The paper poster can be freely read [here](https://sigport.org/sites/default/files/docs/PosterGlobalSip_2.pdf).
+
+All of these guidelines will be exploited and explained in the next paragraphs.
+
+# Software 
+
+To implement the model we used three different software (based on different programming languages):
+
+- Jupyter Notebook (python based).
+
+- RStudio.
+
+- Matlab
+
+The choice of not using a single tool was based on the fact that each one of these has its workhorses that have been useful for us to implement different things.
+
+# Experiment setting
+
+The model has to recognize three speakers (Claudio, Lorenzo and Egon) and three places (House, Street, Subway).
+Each registration grabbed with *Science Journal* recorded the pronunciation of the phrase *"Vaga in vari mari"* with one second of silence before it and one second of silence after it to allow us to make all the registrations of the same duration.
+
+# Data and preprocessing
+
+The first problem to face was clear as soon as we saw the registrations:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+example <- read_csv("C:/Users/claba/OneDrive/Desktop/example_for_report.csv")
+final <- read_csv("C:/Users/claba/OneDrive/Desktop/final.csv")
+D <- read_csv("C:/Users/claba/OneDrive/Desktop/D_example.csv")
+Dwolabel <- read_csv("C:/Users/claba/OneDrive/Desktop/Dwolabel.csv")
+denoised <- read_csv("C:/Users/claba/OneDrive/Desktop/denoised.csv")
+
+kable(example[1:20,c(1,2,3,4,6,7)])
+```
+
+The sampling period is not equal for all sensors and consequentially NAs are present. The "imputation" in this case is, however, easier than the case of i.i.d registrations: these are functions of time describing classical physics phenomena, so we just need a decent way to **interpolate** them. Of course there are many techniques to do this but, thanks to the fact that the timestamp (and so the sampling periods) are really short, we decided to use a simple **linear interpolator**. 
+
+Then we had to cut off some observations for each registration in order to guarantee that all the registrations last the same time and we're pretty sure we were not missing information thanks to the set up of the experiment explained above. 
+
+At this point, each registration was complete and of uniform size. The next step was creating the final dataset by collecting all the registrations in a single data frame indexed by speaker, place and sensor type:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+kable(final[1:20,1:7])
+```
+
+All this preprocessing step were done using Jupyter due to Pyton versatility.
+
+Just to take a look, let's plot one of the sound intensity registrations:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE,fig.align = "center"}
+plot(as.numeric(final[2,4:dim(final)[2]]),type = "l", col = "red", xlab = "t", ylab = "Sound Intensity (dB)", lwd = 2)
+grid (10,10, lty = 6, col = "cornsilk2")
+```
+
+At this point we normalized the numerical variables (so the functions images) to get an isotropic sample and label encoded the categorical ones (i.e.: "Claudio" $\rightarrow$ 1, "Lorenzo" $\rightarrow$ 2). Finally we had our (starting) dataset.
+
+# Observation Model and Functional Analysis
+
+The observations are records of the same lengths $\Delta T$. Each sensor will return (almost) *equispaced samples* of the corresponding continuous physical quantity. We assumed an isotropic Many Normal Means Model (**MNMM**) for the observations. More formally, the $i-th$ observation of the sensor $j$ can be expressed as:
+
+
+$$ y_{j,i} = f_j(i) + \epsilon_i, \qquad \text{with} \quad  \epsilon_i \sim N(0,\sigma_j^2), \quad j \in\{1,...,N\} \quad (1) $$
+
+Here $i \in \{0,1,...,\Delta T \cdot F_s \}$ is a shortcut to indicate the sampling period $i\cdot \frac{1}{F_s}$ where $F_s$ is the sampling frequency and $N$ is the number of sensors.
+
+Once we got the samples, we were firstly interested in recover $f_j(\cdot)$ from them. 
+To do this and thanks to the fact that all the records are of the same duration $\Delta T$ we could just map the sampling times set $\mathbb{S} :=\{0,\frac{1}{F_s},2\cdot \frac{1}{F_s},...,\Delta T\}$ in $\mathbb{S}_n := \{0,\frac{1}{m},...,1\}$ where $m = |\mathbb{S}|$ without loss of generality.
+
+At this point, it was legit (due to their intrinsic physic nature) to assume that the functions of interest belong to $L_2([0,1])$ and we could use all the theory we know about it to estimate and clean the corresponding Generalized Fourier Coefficients modeling an expansion over an orthonormal basis for the space. In particular, given as known all the theory about GFC, we know we can estimate in general, $m$ GFCs with $m$ observations, such that our function estimator become:
+
+$$ \hat{f}_j(x) \approx \sum_{i=1}^m [\tilde{\alpha}_j]_i \phi_i(x), \quad j = 1,...,N  $$
+
+where $[\tilde{\alpha}_j]_i = \frac{1}{m}<\mathbf{y}_j, \phi_i> = \frac{1}{m} \sum_{k=1}^m [\mathbf{y}_j]_k \phi_j(k)$ where $k$ has the same meaning of $i$ in $(1)$ and this raw GFCs are asymptotically unbiased if the time instants are equispaced as in our case. As usual, we could generalize the previous formula in matrix notation for all sensors as:
+
+$$\tilde{\alpha}_j=\frac{1}{m}\Phi\mathbf{y}_j$$
+
+where $[\Phi]_{jk} = \phi_j(k)$.
+
+We decided to use the **cosine basis** to project the observations on. However, before this, we realized it was useless to project each single observation and this because the chosen classification model, as the reader will see, is graph-based and we needed a unique coordinates set per each registration to learn the graph topology.
+
+So we had to think about how many sensors take into account and how to combine them. Considering only the "Sound Intensity (dB)" ($\mathbf{y}_1$) and the "Tonality (Hz)" ($\mathbf{y}_2$) and taking as new observations a convex combination of them seemed us a good choice. So, just to give the reader the sense of the workflow of the project, at this point each registration is uniquely identified by a set of observations obtained as:
+
+$$\mathbf{g}=\beta \mathbf{y}_1+(1-\beta)\mathbf{y}_2 \approx  g(\cdot) = \beta f_1(\cdot)+(1-\beta)f_2(\cdot), \quad \beta \in [0,1]$$
+
+We chose $\beta = .5$.
+At this point the dataset looks like:
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+kable(D[1:20,196:203])
+```
+
+Where the last two columns are the encoding of speakers and places.
+
+Finally we can project this new observations on the cosine basis.
+
+# Dimensionality Reduction & Smoothing
+
+Once we got the coefficients for all the observations, we decided to cut off some of them to **smooth** the initial functions by minimizing the **total regret**. We obtained as cutoff $\hat{J} = 57$. 
+
+This $57$ coefficients per each registration will be the coordinates set in $\mathbb{R}^{57}$ in the graph identifying the speaker.
+
+We can take a look to the smoothing effect:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE,fig.align = "center"}
+plot(as.numeric(Dwolabel[2,]),type = "l", col = "red", xlab = "t", ylab = "Sound Intensity (dB)", lwd = 2, main = "Unsmooth")
+grid (10,10, lty = 6, col = "cornsilk2")
+plot(as.numeric(denoised[2,]),type = "l", col = "red", xlab = "t", ylab = "Sound Intensity (dB)", lwd = 2, main = "Smooth")
+grid (10,10, lty = 6, col = "cornsilk2")
+```
+
+
+
+
+Instead, to identify the places, we chose to use the last $25$% of the coefficients, because we thought that the place discriminant is the noise and, as usual, the noise is related to high frequency components, so the highest indices coefficients.
+
+At this point we had two datasets with different coefficients, one for places and one for speakers.
+
+Why using the vectorial space in which coefficients live is a good idea will be clearer in the next paragraph.
+
+The previous smoothing and dimensionality reduction steps are implemented using RStudio.
+
+# Learning the graph topology
+
+Our objective is encoding in the graph topology a concept of pairwise distance among observations. A good choice (that is a proper distance in $L_2([0,1])$) is (i.e. between registrations $i$ and $j$):
+
+$$d(i,j) = ||g_i(t) - g_j(t)||_{L_{2}}^2 = \int_{[0,1]}(g_i(t) - g_j(t))^2 dt$$
+
+Thanks to the fact that we're using an orthonormal basis, the **Parseval identity** holds, so:
+
+$$d(i,j) = ||g_i(t) - g_j(t)||_{L_2}^2 = ||\alpha_i - \alpha_j||_2^2 \approx ||\tilde{\alpha}_i - \tilde{\alpha}_j||_2^2 = \sum_{k=j}^J ([\tilde{\alpha}_i]_k - [\tilde{\alpha}_j]_k)^2 $$
+
+Where $j\in \{1,\text{ceil}(.75\cdot m)\}$ and $J \in \{\hat{J},m\}$ depending on the dataset.
+
+This is why makes sense considering usual Euclidean norm among vector of coefficients to learn the graph.
+
+Given this, we learn the two graphs using **KNN** with the first 10 nearest neighbors.
+
+This step is implemented using again Jupyter.
+
+Let's take a look at the two graphs with the highlighted ground-truth clusters (obvs. coordinates are meaningless, edges matter):
+
+- Places Graph
+```{r, out.width = "70%", echo = FALSE, fig.align = "center"}
+knitr::include_graphics("Graph_figure_guys.png")
+```
+
+- Speakers Graph
+```{r, out.width = "70%", echo = FALSE, fig.align = "center"}
+knitr::include_graphics("Graph_figure_places.png")
+```
+
+# Semi-Supervised Clustering Based on Signed Total Variation
+
+The algorithm (Berger '18) description and main concepts, again, are [here](https://sigport.org/sites/default/files/docs/PosterGlobalSip_2.pdf) [2]. 
+Follows, anyway, the poster:
+
+```{r, out.width = "100%", echo = FALSE, fig.align = "center"}
+knitr::include_graphics("Paper.png")
+```
+
+From now we consider the reader has read the poster.
+
+The novelty of the work is inserting a concept of dissimilarity and not only similarity in the graph structure. This is combined with a slightly older technique that is based on Total Variation minimization.
+We can say that the algorithm mantra is "cluster in a way that assumes linked nodes are likely to be in the same cluster but paying attention to the labeled nodes and to dissimilarities among them".
+
+We wanna show that, after unlabeling the most of the registrations (nodes), the algorithm can cluster them with good results.
+
+This is a 2 class clustering algorithm, so we adopted a **one vs all** strategy, training a single classifier (clustering) per class, with the samples of that class as positive samples and all other samples as negatives. This strategy requires the base classifiers to produce a real-valued confidence score for its decision, rather than just a class label; discrete class labels alone can lead to ambiguities, where multiple classes are predicted for a single sample.
+
+The decision in ambiguous cases is made by choosing the class with the highest score. In our case, we decided that the score is the maximum among the optimal values that the algorithm outputs per each class minimizing the problem 3 in [2].
+
+The classes are balanced  and the accuracy is a good measure.
+
+The algorithm has been implemented **from scratch** using Matlab (better solvers).
+
+The algorithm parameters are:
+
+- $L = L_1 + L_{-1}$ : the number of labeled nodes at each 1 ("1") vs Others ("-1") iteration.
+- $M$: the number of dissimilarities among $L_1$ and $L_{-1}$ nodes. The dissimilarity between nodes $i$ and $j$ is weighted with $-\sqrt{d(i,j)}$ where $d(i,j)$ is again the euclidean distance among the correspondent coefficients.
+
+We splitted the dataset in a training set (about 50 registrations per class) and a test set (useful later) and we worked on the training set.
+
+
+This is the set up of our simulations:
+
+- 139 nodes.
+- 3 classes per each dataset.
+
+In particular, for Semi-supervised speaker clustering:
+
+- $L_1 = 20 \, ( /(50 \pm \epsilon)$
+- $L_{-1} = 35 \, ( /(150 \pm \epsilon)$
+- $M = 3$ randomly inserted between $L_1$ and $L_{-1}$
+
+Reached accuracy: $91$%.
+
+
+Instead, for Semi-supervised places clustering:
+
+- $L_1 = 20 \, ( /(50 \pm \epsilon)$
+- $L_{-1} = 35 \, ( /(150 \pm \epsilon)$
+- $M = 6$ randomly inserted between $L_1$ and $L_{-1}$
+
+Reached accuracy: $82$%.
+
+
+Obviously,  but just to remember it, the accuracy grows increasing $L$. The little fluctuations are due to the randomness injected by the random labeling:
+
+
+```{r, out.width = "80%", echo = FALSE, fig.align = "center"}
+knitr::include_graphics("Accuracy.png")
+```
+
+# Classification
+
+Once the cluster are made, what happen if a new registration has to be classified? 
+
+Our simple idea is using a *KNN* classifier, so the new registration  is classified with the most frequent class of its $k$ nearest neighbors (again among GFCs) that, given the way we learn the graph, is equivalent to say we're assigning it to the most frequent class of its adjacent nodes.
+
+We chose the $k$ the maximizes the accuracy on the test set. In particular:
+
+- Speaker classification:
+
+```{r, out.width = "80%", echo = FALSE, fig.align = "center"}
+knitr::include_graphics("Accuracy_c.png")
+```
+
+Reached accuracy: $88$% with $k=3$
+
+- Speaker classification:
+
+```{r, out.width = "80%", echo = FALSE, fig.align = "center"}
+knitr::include_graphics("Accuracy_c_p.png")
+```
+
+
+Reached accuracy:$83$% with $k=3$
+
+Fluctuations for the same reason mentioned above. We can live with them, we ensure the results are always the same. Clearly MC simulation was the theoretical alternative.
+
+# Conclusions and possible improvements
+
+The results are pretty good. Of course many little things can be improved to make the work better, but this is not the place. With this project we tried to cover a big slice of the topics faced during the course while proposing a very recent idea and facing its implementation from scratch.
+
+Some improvements (i.e.): other more complex classifiers could be used in the final section, some parameters like $\beta$ and $M$ could be setted with a grid or a random search, more sensors (maybe) could be involved (but different mobiles are very inconsistent on the other sensors) and so on.
+
+\bigbreak
+\bigbreak
+
+Thank you for the course!
